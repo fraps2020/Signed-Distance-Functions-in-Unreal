@@ -1,9 +1,9 @@
 /*=============================================================================
 /  SIGNED DISTANCE FIELDS LIBRARY -- UNREAL 4.x HLSL
 /
-/  Creative Commons 2020 Francesco Antolini
-/                        ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
-/  CC BY-NC 2.0 https://creativecommons.org/licenses/by-nc/2.0/
+/  GNU GPLv3 2020 Francesco Antolini
+/                 ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
+/   "use at will, preserve copyright and licence notices."
 /  
 /  Original code from
 /  [1] Inigo Quilez : https://www.iquilezles.org/www/articles/distfunctions/distfunctions.htm
@@ -655,7 +655,7 @@ float opUnionChamfer(float a, float b, float r) {
 // Intersection has to deal with what is normally the inside of the resulting object
 // when using union, which we normally don't care about too much. Thus, intersection
 // implementations sometimes differ from union implementations.
-float osdfPIntersectionChamfer(float a, float b, float r) {
+float opIntersectionChamfer(float a, float b, float r) {
 	return max(max(a, b), (a + r + b)*sqrt(0.5));
 }
 
@@ -671,7 +671,7 @@ float opUnionRound(float a, float b, float r)
 	return max(r, min(a,b))-length(u);
 }
 
-float osdfPIntersectionRound(float a, float b, float r)
+float opIntersectionRound(float a, float b, float r)
 {
 	float2 u = max(float2(r+a, r+b),float2(0.0,0.0));
 	return min(-r, max(a,b))+length(u);
