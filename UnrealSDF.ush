@@ -1,0 +1,797 @@
+/*=============================================================================
+/  SIGNED DISTANCE FIELDS LIBRARY -- UNREAL 4.x HLSL
+/
+/  Creative Commons 2020 Francesco Antolini
+/                        ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
+/  CC BY-NC 2.0 https://creativecommons.org/licenses/by-nc/2.0/
+/  
+/  Original code from
+/  [1] Inigo Quilez : https://www.iquilezles.org/www/articles/distfunctions/distfunctions.htm
+/  [2] Mercury: 	  http://mercury.sexy/hg_sdf/
+/  Attributions are given in the comment preceding relevant functions.
+/ 
+/  To use with Unreal Engine, place this file in [UE_4.24]\Engine\Shaders\Private\,
+/  then #include it in Common.ush (Common.ush is located in that same folder)
+/  
+/  First time you do this you'll trigger Unreal shader recompilation (it'll take a little while to start up your editor).
+/  You can then use any function described here in your Material Editor's Custom Nodes
+/
+=============================================================================*/
+#pragma once
+
+#define sdfPI 3.14159265
+#define sdfTAU 6.28318530
+#define sdfPHI 1.61803398
+
+
+/*=============================================================================
+	Helper Functions - Math
+=============================================================================*/
+// GLmod: a MOD function to emulate GLSL /mod/ operator implementation in HLSL
+// The differences: https://stackoverflow.com/questions/7610631/glsl-mod-vs-hlsl-fmod
+float GLmod(float a, float b)
+{
+	return a - b*floor(a/b);
+}
+
+float2 GLmod(float2 a, float b)
+{
+	return float2((a.x - b*floor(a.x/b)),(a.y - b*floor(a.y/b)));
+}
+
+float2 GLmod(float2 a, float2 b)
+{
+	return float2((a.x - b.x*floor(a.x/b.x)),(a.y - b.y*floor(a.y/b.y)));
+}
+
+float3 GLmod(float3 a, float b)
+{
+	return float3(
+		(a.x - b*floor(a.x/b)),
+		(a.y - b*floor(a.y/b)),
+		(a.z - b*floor(a.z/b))
+		);
+}
+
+float3 GLmod(float3 a, float3 b)
+{
+		return float3(
+		(a.x - b.x*floor(a.x/b.x)),
+		(a.y - b.y*floor(a.y/b.y)),
+		(a.z - b.z*floor(a.z/b.z))
+		);
+}
+
+// determinist hash function from jorgemoag on shadertoy (https://www.shadertoy.com/view/tscSDs)
+// returns a float between 0 and 1
+// a given input value will always produce the same output value
+float hash(float p)
+{
+return frac(sin(dot(float2(p,p), float2(12.9898, 78.233))) * 43758.5453);    
+}
+
+
+// [2] Sign function that doesn't return 0
+float sdfsgn(float x) {
+return (x<0)?-1:1;
+}
+
+float2 sdfsgn(float2 v) {
+return float2((v.x<0)?-1:1, (v.y<0)?-1:1);
+}
+
+// [2] Maximum/minumum elements of a vector
+float vmax(float2 v) {
+	return max(v.x, v.y);
+}
+
+float vmax(float3 v) {
+	return max(max(v.x, v.y), v.z);
+}
+
+float vmax(float4 v) {
+	return max(max(v.x, v.y), max(v.z, v.w));
+}
+
+float vmin(float2 v) {
+	return min(v.x, v.y);
+}
+
+float vmin(float3 v) {
+	return min(min(v.x, v.y), v.z);
+}
+
+float vmin(float4 v) {
+	return min(min(v.x, v.y), min(v.z, v.w));
+}
+
+float dot2(float2 v) {
+	return dot(v,v);
+}
+
+/*=============================================================================
+	Signed Distance Functions
+=============================================================================*/
+// SPHERES and BLOBS
+// [1] Sphere
+float SDFsphere(in float3 p, in float radius)
+{
+	return length(p) - radius;
+}
+
+// [2] Blobby ball object. You've probably seen it somewhere. This is not a correct distance bound, beware.
+float SDFblob(float3 p) {
+	p = abs(p); //if you divide this for numbers, you get interesting stuff
+	if (p.x < max(p.y, p.z)) p = p.yzx;
+	if (p.x < max(p.y, p.z)) p = p.yzx;
+	float b = max(max(max(
+		dot(p, normalize(float3(1, 1, 1))),
+		dot(p.xz, normalize(float2(sdfPHI+1, 1)))),
+		dot(p.yx, normalize(float2(1, sdfPHI)))),
+		dot(p.xz, normalize(float2(1, sdfPHI))));
+	float l = length(p);
+	return l - 1.5 - 0.2 * (1.5 / 2)* cos(min(sqrt(1.01 - b / l)*(sdfPI / 0.25), sdfPI));
+}
+
+// BOXES ////////////////////////////////////////////////////////
+// [1] Box Scaled following boxScale
+float SDFbox(float3 p, float3 boxScale)
+{
+	float3 q = abs(p) - boxScale;
+	return length(max(q, 0.0)) + min(max(q.x,max(q.y,q.z)), 0.0);
+}
+
+// [1] Rounded Box Scaled following boxScale
+float SDFroundBox(float3 p, float3 boxScale, float roundness)
+{
+	float3 q = abs(p) - boxScale;
+	return length(max(q,0.0)) + min(max(q.x, max(q.y,q.z)), 0.0) - roundness;
+}
+
+// [2] Cheap Box: distance to corners is overestimated
+float SDFboxCheap(float3 p, float3 b) { //cheap box
+	return vmax(abs(p) - b);
+}
+
+// [2] Same as above, but in two dimensions (an endless box -- goes to infinity on the unspecified axis)
+float SDFbox2Cheap(float2 p, float2 b) {
+	return vmax(abs(p)-b);
+}
+
+float SDFbox2(float2 p, float2 b) {
+	float2 d = abs(p) - b;
+	return length(max(d, float2(0.0,0.0))) + vmax(min(d, float2(0.0,0.0)));
+}
+
+// [2] ENDLESS CORNER ////////////////////////////////////////////////////////
+float SDFcorner (float2 p) {
+	return length(max(p, float2(0.0,0.0))) + vmax(min(p, float2(0.0,0.0)));
+}
+
+
+// [2] PLANE ////////////////////////////////////////////////////////
+// Plane with normal n (n is normalized) at some distance from the origin
+float SDFplane(float3 p, float3 n, float distanceFromOrigin)
+{
+	// ! n must be normalized
+	return dot(p,n) + distanceFromOrigin;
+}
+
+// TORUS and DISCS ///////////////////////////////////////////////
+// [1] Torus in the XY plane 
+float SDFtorus(float3 p, float smallRadius, float largeRadius) 
+{
+	//t.x and t.y represent the torus external and internal radii
+	//the torus is vertically aligned (in Unreal, that means aligned to the z axis)
+	float2 q = float2(length(p.xy) - largeRadius, p.z);
+	return length(q)-smallRadius;
+}
+
+// [2] A circle line. Can also be used to make a torus using "thickness"
+float SDFcircle(float3 p, float r, float thickness) {
+	float l = length(p.xy) - r;
+	return length(float2(p.z, l)) - thickness;
+}
+
+// [2] A circular disc with no thickness (i.e. a cylinder with no height).
+// Subtract some value to make a flat disc with rounded edge.
+float SDFdisc(float3 p, float r) {
+	float l = length(p.xy) - r;
+	return l < 0 ? abs(p.z) : length(float2(p.z, l));
+}
+
+// CYLINDERS & CAPSULES & CONES //////////////////////////////////////////////////////
+// [1] infinite cylinder
+float SDFcylinderInf(float3 p, float3 c)
+{
+	//This formula seems to be in a bit of error as changing values of c.xy dont affect the cylinder shape, but rather cause an offset of it from the center. 
+	//They can be eliminated entirely as a translation can more easily/transparently be achieved by adding an offset to the position input.
+	//As such the only parameter that affects the cylinder shape is c.z, which changes the radius of the infinite cylinder.
+	return length(p.xz-c.xy)-c.z;
+}
+
+//infinite cone (caution, behaves somewhat weirdly) 
+//from Sai Narayan: https://sainarayan.me/2017/12/16/raymarching-using-signed-distance-fields-in-ue4/
+float SDFconeInf(float3 p, float2 c)
+{
+	//Here the two axial combination of p.xy doesn’t determine which way the cone is pointed, but rather which plane the base of the cone is aligned with.	
+	//Instead, p.z determines which axis is used for the tip of the cone to point to.
+	//c.x controls the width of the base, c.y controls the narrowness of the tip.
+	//c is the sin/cos of the angle
+	//c must be normalized
+	float q = length(p.xy);
+	return dot(normalize(c), float2(q,p.z));
+}
+
+// [2] Cone with correct distances to tip and base circle. Z is up, 0 is in the middle of the base.
+float SDFcone(float3 p, float radius, float height) 
+{
+	float2 q = float2(length(p.xy), p.z);  //from now on "q.y" actually means "z". it's y as q is a float2
+	float2 tip = q - float2(0.0, height);
+	float2 mantleDir = normalize(float2(height, radius)); //similar as per q (mantleDir.y refer to the z axis)
+	float mantle = dot(tip, mantleDir);
+	float d = max(mantle, -q.y);
+	float projected = dot(tip, float2(mantleDir.y, -mantleDir.x));
+	
+	// distance to tip
+	if ((q.y > height) && (projected < 0)) {   
+		d = max(d, length(tip));
+	}
+	
+	// distance to base ring
+	if ((q.x > radius) && (projected > length(float2(height, radius)))) {
+		d = max(d, length(q - float2(radius, 0)));
+	}
+	return d;
+}
+
+//[1] capsule/line --  between two end points <a> and <b> with radius r 
+float SDFcapsule(float3 p, float3 a, float3 b, float r)
+{
+	float3 pa = p - a;
+	float3 ba = b - a;
+	float h = clamp(dot(pa,ba)/dot(ba,ba),0.0,1.0);
+	return length(pa - ba*h) - r;
+}
+
+// [2] capsule/line -- between two end points <a> and <b> with radius r 
+// fLineSegment is just a helper function
+float fLineSegment(float3 p, float3 a, float3 b) { 
+	float3 ab = b - a;
+	float t = saturate(dot(p-a, ab)/ dot(ab, ab));
+	return length((ab*t + a)- p);
+}
+float SDFcapsuleHg(float3 p, float3 a, float3 b, float r)
+{
+	return fLineSegment(p, a, b) - r;
+}
+
+// vertical capsule
+float SDFverticalCapsule(float3 p, float r, float h)
+{
+	p.z -= clamp(p.z, 0.0, h);
+	return length(p) - r;
+}
+
+// [2] Cylinder standing upright on the xy plane
+float SDFuprightCylinder(float3 p, float r, float height)
+{
+	float d = length(p.xy) - r;
+	d = max(d, abs(p.z) - height);
+	return d;
+}
+
+//[1] capped cylinder 
+float SDFcapCylinder(float3 p, float3 a, float3 b, float r)
+{
+  float3  ba = b - a;
+  float3  pa = p - a;
+  float baba = dot(ba,ba);
+  float paba = dot(pa,ba);
+  float x = length(pa*baba-ba*paba) - r*baba;
+  float y = abs(paba-baba*0.5)-baba*0.5;
+  float x2 = x*x;
+  float y2 = y*y*baba;
+  float d = (max(x,y)<0.0)?-min(x2,y2):(((x>0.0)?x2:0.0)+((y>0.0)?y2:0.0));
+  return sign(d)*sqrt(abs(d))/baba;
+}
+
+//[1] Joint (deformed capsule) -- check also https://www.shadertoy.com/view/3ld3DM
+//returns distance in .x and UVW parametrization in .yzw
+float4 SDFjoint(float3 p, float l, float a, float w)
+{
+	if(abs(a)<0.001)
+		return float4(length(p-float3(0,clamp(p.z,0.0,1),0))-w, p);
+
+	float2 sc = float2(sin(a), cos(a));
+	float ra = 0.5*l/a;
+	p.x -= ra;
+	float2 q = p.xz - 2.0*sc*max(0.0,dot(sc,p.xz));
+	float u = abs(ra) - length(q);
+	float d2 = (q.y<0.0) ? dot2(q+float2(ra,0.0)):u*u;
+	float s = sign(a);
+	return float4(
+		sqrt(d2+p.y*p.y)-w,
+		(p.z>0.0)?s*u:s*sign(-p.x)*(q.x+ra),
+		(p.z>0.0)?atan2(s*p.z, -s*p.x)*ra:(s*p.x<0.0)?p.z:l-p.z,
+		p.y);
+}
+
+// PRISMS //////////////////////////////////////////////////////
+// [2] hexagonal prism, circumcircle
+// h.x changes the radius of the hexagon,
+// h.y changes the thickness of the prism 
+float SDFhexPrism(float3 p, float2 h)
+{
+	float3 q = abs(p);
+	return max(q.z-h.y,max((q.x*0.866025+q.y*0.5),q.y)-h.x);
+}
+
+// [2] hexagonal prism, incircle 
+float SDFincircleHexPrism(float3 p, float2 h)
+{
+	return SDFhexPrism(p, float2(h.x*sqrt(3)*0.5,h.y));
+}
+
+// [2] triangular prism
+float SDFtriPrism(float3 p, float2 h)
+{
+	float3 q = abs(p);
+	return max(q.z-h.y,max(q.x*0.866025+p.y*0.5,-p.y)-h.x*0.5);
+}
+
+// [2] GENERALIZED DISTANCE FUNCTIONS ///////////////////////////////////////////
+// "Generalized Distance Functions" by Akleman and Chen.
+// https://www.researchgate.net/publication/3789633_Generalized_distance_functions
+static const float3 GDFVectors[19] = {
+	normalize(float3(1, 0, 0)),
+	normalize(float3(0, 1, 0)),
+	normalize(float3(0, 0, 1)),
+
+	normalize(float3(1, 1, 1 )),
+	normalize(float3(-1, 1, 1)),
+	normalize(float3(1, -1, 1)),
+	normalize(float3(1, 1, -1)),
+
+	normalize(float3(0, 1, sdfPHI+1)),
+	normalize(float3(0, -1, sdfPHI+1)),
+	normalize(float3(sdfPHI+1, 0, 1)),
+	normalize(float3(-sdfPHI-1, 0, 1)),
+	normalize(float3(1, sdfPHI+1, 0)),
+	normalize(float3(-1, sdfPHI+1, 0)),
+
+	normalize(float3(0, sdfPHI, 1)),
+	normalize(float3(0, -sdfPHI, 1)),
+	normalize(float3(1, 0, sdfPHI)),
+	normalize(float3(-1, 0, sdfPHI)),
+	normalize(float3(sdfPHI, 1, 0)),
+	normalize(float3(-sdfPHI, 1, 0))
+};
+
+// Version with variable exponent.
+// This is slow and does not produce correct distances, but allows for bulging of objects.
+float fGDF(float3 p, float r, float e, int begin, int end) {
+	float d = 0;
+	for (int i = begin; i <= end; ++i)
+		d += pow(abs(dot(p, GDFVectors[i])), e);
+	return pow(d, 1/e) - r;
+}
+
+// Version with without exponent, creates objects with sharp edges and flat faces
+float fGDF(float3 p, float r, int begin, int end) {
+	float d = 0;
+	for (int i = begin; i <= end; ++i)
+		d = max(d, abs(dot(p, GDFVectors[i])));
+	return d - r;
+}
+
+// Primitives follow:
+float GDFoctahedron(float3 p, float r, float e) {
+	return fGDF(p, r, e, 3, 6);
+}
+
+float GDFdodecahedron(float3 p, float r, float e) {
+	return fGDF(p, r, e, 13, 18);
+}
+
+float GDFicosahedron(float3 p, float r, float e) {
+	return fGDF(p, r, e, 3, 12);
+}
+
+float GDFtruncatedOctahedron(float3 p, float r, float e) {
+	return fGDF(p, r, e, 0, 6);
+}
+
+float GDFtruncatedIcosahedron(float3 p, float r, float e) {
+	return fGDF(p, r, e, 3, 18);
+}
+
+float GDFoctahedron(float3 p, float r) {
+	return fGDF(p, r, 3, 6);
+}
+
+float GDFdodecahedron(float3 p, float r) {
+	return fGDF(p, r, 13, 18);
+}
+
+float GDFicosahedron(float3 p, float r) {
+	return fGDF(p, r, 3, 12);
+}
+
+float GDFtruncatedOctahedron(float3 p, float r) {
+	return fGDF(p, r, 0, 6);
+}
+
+float GDFtruncatedIcosahedron(float3 p, float r) {
+	return fGDF(p, r, 3, 18);
+}
+
+/*=======================================================================================
+	Basic Transforms: Translation, Rotation
+========================================================================================*/
+// (!naming: all functions changing the domain start with p) 
+// TRANSLATION /////////////////////////////////////////////////
+float3 pTranslate(inout float3 p, float3 t)
+{
+	p = p-t;
+}
+
+// SCALING ///////////////////////////////////////////////////////////
+// HLSL doesn't allow HOP, so no way to have an elegant operator here
+// You'll need to this locally within your primitive call
+// Would have been:
+// float opScale(float3 p, float s, primitive)
+// { return primitive(p/s)*s; }
+
+// ROTATION /////////////////////////////////////////////////
+// [2] Rotate around a coordinate axis (i.e. in a plane perpendicular to that axis) by angle <a>.
+// Read like this: R(p.xz, a) rotates "x towards z".
+// This is fast if <a> is a comsdfPIle-time constant and slower (but still practical) if not.
+void pRotate(inout float2 p, float a) 
+{
+	p = cos(a)*p + sin(a)*float2(p.y, -p.x);
+}
+
+// [2] Shortcut for 45-degrees rotation
+void pRotate45(inout float2 p)
+{
+	p = (p+float2(p.y, -p.x))*sqrt(0.5);
+}
+
+// DISPLACEMENT /////////////////////////////////////////////////////
+// [1] Sinusoidal displacement, add to the result of you distance function,
+// i.e. dist = sphereSDF(p,60)+opDisplace(p,0.1,10)
+float opDisplace(float3 p, float amount, float intensity)
+{
+	return (sin(amount*p.x)*sin(amount*p.y)*sin(amount*p.z))*intensity;
+}
+
+/*=======================================================================================
+	[2] Repetition
+========================================================================================*/
+// (!naming: all functions changing the domain start with p) 
+// They return a unique identifier for the repeated object
+// REPETITION ON 1 DIMENSION
+// Repeat space along one axis. Use like this to repeat along the x axis:
+// <float cell = pMod1(p.x,5);> - using the return value is optional.
+float pMod1(inout float p, float spacing)
+{
+	float halfspacing = spacing*0.5;
+	float c = floor((p+halfspacing)/spacing);
+	p = GLmod(p+halfspacing,spacing)-halfspacing;
+	return c;
+}
+
+// Same as opMod1, but mirror every second cell so they match at the boundaries
+float pModMirror1(inout float p, float spacing)
+{
+	float halfspacing = spacing*0.5;
+	float c = floor((p+halfspacing)/spacing);
+	p = GLmod(p+halfspacing,spacing)-halfspacing;
+	p*= GLmod(c, 2.0)*2 - 1;
+	return c;
+}
+
+// Repeat the domain only in positive direction. Everything in the negative half-space is unchanged.
+float pModSingle1(inout float p, float spacing)
+{
+	float halfspacing = spacing*0.5;
+	float c = floor((p + halfspacing)/spacing);
+	if (p >= 0)
+		p = GLmod(p + halfspacing, spacing) - halfspacing;
+	return c;
+}
+
+// Repeat only a few times: from indices <start> to <stop> (similar to above, but more flexible)
+float pModInterval1(inout float p, float spacing, float start, float stop)
+{
+	float halfspacing = spacing*0.5;
+	float c = floor((p + halfspacing)/spacing);
+	p = GLmod(p+halfspacing, spacing) - halfspacing;
+	if (c > stop) { //yes, this might not be the best thing numerically.
+		p += spacing*(c - stop);
+		c = stop;
+	}
+	if (c <start) {
+		p += spacing*(c - start);
+		c = start;
+	}
+	return c;
+}
+
+// REPETITION BY FIXED ANGLE
+// Repeat around the origin by a fixed angle.
+// For easier use, num of repetitions is use to specify the angle.
+float pModPolar(inout float2 p, float repetitions)
+{
+	float angle = 2*sdfPI/repetitions;
+	float a = atan2(p.y, p.x) + angle/2.;
+	float r = length(p);
+	float c = floor(a/angle);
+	a = GLmod(a,angle) - angle/2.;
+	p = float2(cos(a), sin(a))*r;
+	// For an odd number of repetitions, fix cell index of the cell in -x direction
+	// (cell index would be e.g. -5 and 5 in the two halves of the cell):
+	if (abs(c) >= (repetitions/2)) c = abs(c);
+	return c;
+}
+
+// REPETITION ON 2 DIMENSIONS
+// Repeat in two dimensions
+float2 pMod2(inout float2 p, float2 spacing) 
+{
+	float2 halfspacing = spacing*0.5;
+	float2 c = floor((p + halfspacing)/spacing);
+	p = GLmod(p + halfspacing, spacing) - halfspacing;
+	return c;
+}
+
+// Same, but mirror every second cell so all boundaries match
+float2 pModMirror2(inout float2 p, float2 spacing)
+{
+	float2 halfspacing = spacing*0.5;
+	float2 c = floor((p + halfspacing)/spacing);
+	p = GLmod(p + halfspacing, spacing) - halfspacing;
+	p *= GLmod(c,float2(2.0,2.0))*2 - float2(1.0,1.0);
+	return c;
+}
+
+// Same, but mirror every second cell at the diagonal as well
+float2 pModGrid2(inout float2 p, float2 spacing)
+{
+	float2 c = floor((p + spacing*0.5)/spacing);
+	p = GLmod(p + spacing*0.5, spacing) - spacing*0.5;
+	p *= GLmod(c,float2(2.0,2.0))*2 - float2(1.0,1.0);
+	p -= spacing/2;
+	if (p.x > p.y) p.xy = p.yx;
+	return floor(c/2);
+}
+
+//REPETITION ON 3 DIMENSIONS
+// Repeat in three dimensions
+float3 pMod3(inout float3 p, float3 spacing) {
+	float3 c = floor((p + spacing*0.5)/spacing);
+	p = GLmod(p + spacing*0.5, spacing) - spacing*0.5;
+	return c;
+}
+
+
+//MIRRORS
+// Mirror at an axis-aligned plane which is at a specified distance <dist> from the origin.
+float pMirror(inout float p, float dist)
+{
+	float s = sdfsgn(p);
+	p = abs(p)-dist;
+	return s;
+}
+
+// Mirror in both dimensions and at the diagonal, yielding one eighth of the space.
+// translate by dist before mirroring.
+float2 pMirrorOctant(inout float2 p, float2 dist)
+{
+	float2 s = sdfsgn(p);
+	pMirror(p.x, dist.x);
+	pMirror(p.y, dist.y);
+	if (p.y > p.x)
+		p.xy = p.yx;
+	return s;
+}
+
+// Reflect space at a plane
+float pReflect(inout float3 p, float3 planeNormal, float offset) 
+{
+	float t = dot(p, planeNormal)+offset;
+	if (t < 0) 
+	{
+		p = p - (2*t)*planeNormal;
+	}
+	return sdfsgn(t);
+}
+
+/*=======================================================================================
+	Operations across 2 primitives: Unions, Differences (aka Subtractions), Intersections 
+========================================================================================*/
+// [1] STANDARD /////////////////////////////////////////////////
+float opUnion(float d1, float d2)
+{
+	return min(d1,d2);
+}
+
+float opDifference(float d1, float d2) //subtract d1 from d2
+{
+	return max(-d1, d2);
+}
+
+float opIntersection(float d1, float d2)
+{
+	return max(d1, d2);
+}
+	 
+// [1] SMOOTHED ////////////////////////////////////////////
+float opSmoothUnion(float d1, float d2, float k)
+{
+	float h = clamp(0.5 + 0.5*(d2-d1)/k, 0.0, 1.0);
+	return lerp( d2, d1, h) - k*h*(1.0-h);
+}
+
+float opSmoothDifference(float d1, float d2, float k)
+{
+	float h = clamp(0.5 - 0.5*(d2+d1)/k, 0.0, 1.0);
+	return lerp( d2, -d1, h) + k*h*(1.0-h);
+}
+
+float opSmoothIntersection(float d1, float d2, float k)
+{
+	float h = clamp (0.5 -0.5*(d2-d1)/k, 0.0,0.1);
+	return lerp(d2, d1, h) + k*h*(1.0-h);
+}
+
+// [2] CHAMFER /////////////////////////////////////////////////
+// The "Chamfer" flavour makes a 45-degree chamfered edge (the diagonal of a square of spacing <r>):
+float opUnionChamfer(float a, float b, float r) {
+	return min(min(a, b), (a - r + b)*sqrt(0.5));
+}
+
+// Intersection has to deal with what is normally the inside of the resulting object
+// when using union, which we normally don't care about too much. Thus, intersection
+// implementations sometimes differ from union implementations.
+float osdfPIntersectionChamfer(float a, float b, float r) {
+	return max(max(a, b), (a + r + b)*sqrt(0.5));
+}
+
+// Difference can be built from Intersection or Union:
+float opDifferenceChamfer(float a, float b, float r) {
+	return osdfPIntersectionChamfer(a, -b, r);
+}
+
+// [2] ROUNDED (hg smoothed) /////////////////////////////////////////////////
+float opUnionRound(float a, float b, float r)
+{
+	float2 u = max(float2(r-a,r-b),float2(0.0,0.0));
+	return max(r, min(a,b))-length(u);
+}
+
+float osdfPIntersectionRound(float a, float b, float r)
+{
+	float2 u = max(float2(r+a, r+b),float2(0.0,0.0));
+	return min(-r, max(a,b))+length(u);
+}
+
+float opDifferenceRound(float a, float b, float r)
+{
+	return osdfPIntersectionRound(a, -b, r);
+}
+
+// [2] Union "soft" (hg smoothed) /////////////////////////////////////////////////
+// Similar to fOpUnionRound, but more lipschitz-y at acute angles
+// (and less so at 90 degrees). Useful when fudging around too much
+// by MediaMolecule, from Alex Evans' siggraph slides
+float opUnionSoft(float a, float b, float r) {
+	float e = max(r - abs(a - b), 0);
+	return min(a, b) - e*e*0.25/r;
+}
+
+// [2] COLUMNS ///////////////////////////////////////////////// 
+// The "Columns" flavour makes n-1 circular columns at a 45 degree angle:
+float opUnionColumns(float a, float b, float r, float n) {
+	if ((a < r) && (b < r)) {
+		float2 p = float2(a, b);
+		float columnradius = r*sqrt(2)/((n-1)*2+sqrt(2));
+		pRotate45(p);
+		p.x -= sqrt(2)/2*r;
+		p.x += columnradius*sqrt(2);
+		if (GLmod(n,2) == 1) {
+			p.y += columnradius;
+		}
+		// At this point, we have turned 45 degrees and moved at a point on the
+		// diagonal that we want to place the columns on.
+		// Now, repeat the domain along this direction and place a circle.
+		pMod1(p.y, columnradius*2);
+		float result = length(p) - columnradius;
+		result = min(result, p.x);
+		result = min(result, a);
+		return min(result, b);
+	} else {
+		return min(a, b);
+	}
+}
+
+float opDifferenceColumns(float a, float b, float r, float n) {
+	a = -a;
+	float m = min(a, b);
+	//avoid the expensive computation where not needed (produces discontinuity though)
+	if ((a < r) && (b < r)) {
+		float2 p = float2(a, b);
+		float columnradius = r*sqrt(2)/n/2.0;
+		columnradius = r*sqrt(2)/((n-1)*2+sqrt(2));
+
+		pRotate45(p);
+		p.y += columnradius;
+		p.x -= sqrt(2)/2*r;
+		p.x += -columnradius*sqrt(2)/2;
+
+		if (GLmod(n,2) == 1) {
+			p.y += columnradius;
+		}
+		pMod1(p.y,columnradius*2);
+
+		float result = -length(p) + columnradius;
+		result = max(result, p.x);
+		result = min(result, a);
+		return -min(result, b);
+	} else {
+		return -m;
+	}
+}
+
+float opIntersectionColumns(float a, float b, float r, float n) {
+	return opDifferenceColumns(a,-b,r, n);
+}
+
+// [2] PIPE ///////////////////////////////////////////////////
+// produces a cylindical sdfPIpe that runs along the intersection.
+// No objects remain, only the sdfPIpe. This is not a boolean operator.
+float opPipe(float a, float b, float r) {
+	return length(float2(a, b)) - r;
+}
+
+// [2] STAIRS ///////////////////////////////////////////////// 
+// The "Stairs" flavour produces n-1 steps of a staircase:
+// much less stusdfPId version by paniq
+float opUnionStairs(float a, float b, float r, float n) {
+	float s = r/n;
+	float u = b-r;
+	return min(min(a,b), 0.5 * (u + a + abs ((GLmod (u - a + s, 2 * s)) - s)));
+}
+
+// We can just call Union since stairs are symmetric.
+float opIntersectionStairs(float a, float b, float r, float n) {
+	return opUnionStairs(-a, -b, r, n);
+}
+
+float opDifferenceStairs(float a, float b, float r, float n) {
+	return opUnionStairs(-a, b, r, n);
+}
+
+// [2] ENGRAVINGS //////////////////////////////////////////////////
+// first object gets a v-shaped engraving where it intersect the second
+float opEngrave(float a, float b, float r) {
+	return max(a, (a + r - abs(b))*sqrt(0.5));
+}
+
+// first object gets a carpenter-style groove cut out
+// ra is the depth of the groove, rb the width
+// Good for greebling!
+float opGroove(float a, float b, float ra, float rb) {
+	return max(a, min(a + ra, rb - abs(b)));
+}
+
+// first object gets a carpenter-style tongue attached
+// ra: how much the tongue protrodues; rb: width of the tongue
+float opTongue(float a, float b, float ra, float rb) {
+	return min(a, max(a - ra, abs(b) - rb));
+}
+
+
+
+
