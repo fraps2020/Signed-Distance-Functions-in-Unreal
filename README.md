@@ -1,5 +1,5 @@
 # Signed Distance Functions in Unreal Editor
-A library providing Signed Distance Functions you can use with your custom raymarcher in Unreal Engine's Material Editor's Custom Nodes. 
+A library providing Signed Distance Functions you can use with your custom raymarcher in Unreal Engine's Material Editor's custom nodes. 
 
 ## How to use:
 To use with Unreal Engine, place this file in [UE_4.24]\Engine\Shaders\Private\, then #include it in Common.ush (Common.ush is located in that same folder).
