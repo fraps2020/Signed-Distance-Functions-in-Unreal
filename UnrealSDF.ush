@@ -661,7 +661,7 @@ float opIntersectionChamfer(float a, float b, float r) {
 
 // Difference can be built from Intersection or Union:
 float opDifferenceChamfer(float a, float b, float r) {
-	return osdfPIntersectionChamfer(a, -b, r);
+	return opIntersectionChamfer(a, -b, r);
 }
 
 // [2] ROUNDED (hg smoothed) /////////////////////////////////////////////////
@@ -679,7 +679,7 @@ float opIntersectionRound(float a, float b, float r)
 
 float opDifferenceRound(float a, float b, float r)
 {
-	return osdfPIntersectionRound(a, -b, r);
+	return opIntersectionRound(a, -b, r);
 }
 
 // [2] Union "soft" (hg smoothed) /////////////////////////////////////////////////
